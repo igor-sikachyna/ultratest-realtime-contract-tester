@@ -196,6 +196,7 @@ export class RealtimeContractTesterAPI {
         do {
             // Create a snapshot to revert to
             let snapshot = await ultra.activeTestState.snapshot();
+            logger.log(`✔ Created a snapshot`, 'green');
 
             // Run all the tests
             let allPassed = true;
