@@ -1,0 +1,17 @@
+{
+    "name": "ultratest-realtime-contract-tester",
+    "version": "1.0.0",
+    "files": [],
+    "scripts": {
+        "build": "tsc"
+    },
+    "dependencies": {
+        "@ultraos/ultratest": "../../..",
+        "ultratest-genesis-plugin": "../../native/genesis",
+        "ultratest-system-plugin": "../../native/system"
+    },
+    "ultratestPlugins": {
+        "ultratest-genesis-plugin": "native",
+        "ultratest-system-plugin": "native"
+    }
+}

@@ -1,0 +1,23 @@
+{
+    "compilerOptions": {
+        "declaration": true,
+        "declarationMap": true,
+        "downlevelIteration": true,
+        "noImplicitAny": false,
+        "noImplicitThis": false,
+        "module": "commonjs",
+        "lib": ["DOM", "ES2017"],
+        "isolatedModules": false,
+        "target": "ES6",
+        "outDir": "lib",
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "moduleResolution": "node",
+        "pretty": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "sourceMap": false,
+        "strict": false
+    },
+    "include": ["./**/*"]
+}
