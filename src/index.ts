@@ -18,8 +18,6 @@ export interface MonitoredContract {
     wasmPath?: string;
     abiLastModifiedTimestamp?: number;
     wasmLastModifiedTimestamp?: number;
-    //abiLastHash?: string;
-    //wasmLastHash?: string;
 }
 
 abstract class RealtimeContractTesterTest extends UltraTest {
@@ -101,33 +99,6 @@ export class RealtimeContractTesterAPI {
         return result;
     }
 
-    // private async getDiff(monitored: MonitoredContract[]): Promise<MonitoredContract[]> {
-    //     let result: MonitoredContract[] = [];
-    //     for (let i = 0; i < monitored.length; i++) {
-    //         let updateAbi = false;
-    //         let updateWasm = false;
-    //         if (monitored[i].abiPath) {
-    //             let hash = await this.computeHash(monitored[i].abiPath);
-    //             updateAbi = monitored[i].abiLastHash !== hash;
-    //             monitored[i].abiLastHash = hash;
-    //         }
-    //         if (monitored[i].wasmPath) {
-    //             let hash = await this.computeHash(monitored[i].wasmPath);
-    //             updateWasm = monitored[i].wasmLastHash !== hash;
-    //             monitored[i].wasmLastHash = hash;
-    //         }
-
-    //         if (updateAbi || updateWasm) {
-    //             result.push({
-    //                 account: monitored[i].account,
-    //                 abiPath: updateAbi ? monitored[i].abiPath : null,
-    //                 wasmPath: updateWasm ? monitored[i].wasmPath : null
-    //             });
-    //         }
-    //     }
-    //     return result;
-    // }
-
     private sleep(ms: number): Promise<void> {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
@@ -193,9 +164,11 @@ export class RealtimeContractTesterAPI {
             logger.log(`> Running tets once`, 'green');
         }
 
+        let snapshotCounter = 0;
         do {
             // Create a snapshot to revert to
-            let snapshot = await ultra.activeTestState.snapshot();
+            let snapshot = await ultra.activeTestState.snapshot(`realtime-tester-${snapshotCounter}`);
+            snapshotCounter++;
             logger.log(`✔ Created a snapshot`, 'green');
 
             // Run all the tests
