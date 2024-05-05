@@ -256,12 +256,16 @@ export class RealtimeContractTesterAPI {
         if (runForever) {
             logger.log(`> Running tets repeatedly`, 'green');
         } else {
-            logger.log(`> Running tets once`, 'green');
+            if (monitoredContracts.length === 0 || monitoredFiles.length === 0) {
+                logger.log(`> Running tets once because there are no files to monitor`, 'yellow');
+            } else {
+                logger.log(`> Running tets once because a directory for tests was provided: ${config.configData.testsPath}`, 'yellow');
+            }
         }
 
         let snapshotCounter = 0;
         let needSnapshot = true;
-        let lastSnapshot;
+        let lastSnapshot: string = null;
         do {
             // Create a snapshot to revert to
             if (needSnapshot) {
@@ -297,9 +301,10 @@ export class RealtimeContractTesterAPI {
                 }
 
                 // Revert to the last snapshot
-                await ultra.activeTestState.restore(lastSnapshot);
-
-                logger.log(`✔ Restored from snapshot`, 'green');
+                if (lastSnapshot) {
+                    await ultra.activeTestState.restore(lastSnapshot);
+                    logger.log(`✔ Restored from snapshot`, 'green');
+                }
 
                 // Update smart contracts
                 for (let i = 0; i < diffContracts.length; i++) {
