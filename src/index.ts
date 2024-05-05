@@ -20,8 +20,14 @@ export interface MonitoredContract {
     wasmLastModifiedTimestamp?: number;
 }
 
+interface MonitoredFile {
+    file: string;
+    lastModifiedTimestamp?: number;
+}
+
 abstract class RealtimeContractTesterTest extends UltraTest {
-    abstract monitorContracts(): Array<MonitoredContract>;;
+    abstract monitorContracts(): Array<MonitoredContract>;
+    abstract monitorFiles(): Array<string>;
 }
 
 export class RealtimeContractTesterAPI {
@@ -34,10 +40,16 @@ export class RealtimeContractTesterAPI {
         if (customNodeos) this.api = new HTTP_API(customNodeos);
     }
 
+    private fixPath(testPath: string, filePath: string) {
+        // Don't touch absolute path
+        if (path.isAbsolute(filePath)) return filePath;
+        return path.join(path.dirname(testPath), filePath)
+    }
+
     private collectWasmAndAbi(testPath: string, monitored: MonitoredContract[]) {
         for (let i = 0; i < monitored.length; i++) {
             if (monitored[i].contract && !monitored[i].abiPath && !monitored[i].wasmPath) {
-                const dirCont = fs.readdirSync(path.join(path.dirname(testPath), monitored[i].contract));
+                const dirCont = fs.readdirSync(this.fixPath(testPath, monitored[i].contract));
                 let foundAbi = false;
                 let foundWasm = false;
                 for (let file of dirCont) {
@@ -46,14 +58,14 @@ export class RealtimeContractTesterAPI {
                             throw new Error(`Found multiple ABIs at ${monitored[i].contract}. Either ensure there is only 1 or specify .abiPath manually`);
                         }
                         foundAbi = true;
-                        monitored[i].abiPath = path.join(path.dirname(testPath), monitored[i].contract, file);
+                        monitored[i].abiPath = path.join(this.fixPath(testPath, path.join(monitored[i].contract, file)));
                     }
                     if (file.match(/.*\.(wasm)$/gi)) {
                         if (foundWasm) {
                             throw new Error(`Found multiple WASMs at ${monitored[i].contract}. Either ensure there is only 1 or specify .wasmPath manually`);
                         }
                         foundWasm = true;
-                        monitored[i].wasmPath = path.join(path.dirname(testPath), monitored[i].contract, file);
+                        monitored[i].wasmPath = path.join(this.fixPath(testPath, path.join(monitored[i].contract, file)));
                     }
                 }
             }
@@ -72,7 +84,7 @@ export class RealtimeContractTesterAPI {
         return hash.digest('hex');
     }
 
-    private getDiff(monitored: MonitoredContract[]): MonitoredContract[] {
+    private getDiffContracts(monitored: MonitoredContract[]): MonitoredContract[] {
         let result: MonitoredContract[] = [];
         for (let i = 0; i < monitored.length; i++) {
             let updateAbi = false;
@@ -95,6 +107,18 @@ export class RealtimeContractTesterAPI {
                     wasmPath: updateWasm ? monitored[i].wasmPath : null
                 });
             }
+        }
+        return result;
+    }
+
+    private getDiffFiles(monitored: MonitoredFile[]): MonitoredFile[] {
+        let result: MonitoredFile[] = [];
+        for (let i = 0; i < monitored.length; i++) {
+            let stat = fs.statSync(monitored[i].file);
+            if (monitored[i].lastModifiedTimestamp !== stat.mtimeMs) {
+                result.push(monitored[i]);
+            }
+            monitored[i].lastModifiedTimestamp = stat.mtimeMs;
         }
         return result;
     }
@@ -146,18 +170,38 @@ export class RealtimeContractTesterAPI {
         return await ultra.api.transact(actions);
     }
 
-    public async runTests(ultra: UltraTestAPI, tests: { [key: string]: Function }) {
-        let monitored: MonitoredContract[] = [];
+    public async importFresh(modulePath) {
+        // Oof: https://ar.al/2021/02/22/cache-busting-in-node.js-dynamic-esm-imports/
+        const cacheBustingModulePath = `${modulePath}?update=${Date.now()}`;
+        return (await import(cacheBustingModulePath));
+    }
+
+    public async runTests(ultra: UltraTestAPI, tests: { [key: string]: Function } | string) {
+        let monitoredContracts: MonitoredContract[] = [];
+        let monitoredFiles: MonitoredFile[] = [];
         let func = (<RealtimeContractTesterTest>ultra.activeTestState.file).monitorContracts;
         if (func) {
-            monitored = func();
+            monitoredContracts = func();
         }
-        monitored = this.collectWasmAndAbi(ultra.activeTestState.filePath, monitored);
+        let func2 = (<RealtimeContractTesterTest>ultra.activeTestState.file).monitorFiles;
+        if (func2) {
+            monitoredFiles = func2().map((f) => {return {file: this.fixPath(ultra.activeTestState.filePath, f)}});
+        }
+        monitoredContracts = this.collectWasmAndAbi(ultra.activeTestState.filePath, monitoredContracts);
+
+        for (let i = 0; i < monitoredContracts.length; i++) {
+            if (monitoredContracts[i].abiPath) logger.log(`> Monitoring: ${monitoredContracts[i].abiPath}`, 'green');
+            if (monitoredContracts[i].wasmPath) logger.log(`> Monitoring: ${monitoredContracts[i].wasmPath}`, 'green');
+        }
+        for (let i = 0; i < monitoredFiles.length; i++) {
+            logger.log(`> Monitoring: ${monitoredFiles[i].file}`, 'green');
+        }
 
         // Get initial difference to initialize timestamps
-        this.getDiff(monitored);
+        this.getDiffContracts(monitoredContracts);
+        this.getDiffFiles(monitoredFiles);
 
-        let runForever = config.configData.testsPath.endsWith('.ts') && monitored.length > 0;
+        let runForever = config.configData.testsPath.endsWith('.ts') && (monitoredContracts.length > 0 || monitoredFiles.length > 0);
         if (runForever) {
             logger.log(`> Running tets repeatedly`, 'green');
         } else {
@@ -165,49 +209,79 @@ export class RealtimeContractTesterAPI {
         }
 
         let snapshotCounter = 0;
+        let needSnapshot = true;
+        let lastSnapshot;
         do {
             // Create a snapshot to revert to
-            let snapshot = await ultra.activeTestState.snapshot(`realtime-tester-${snapshotCounter}`);
-            snapshotCounter++;
-            logger.log(`✔ Created a snapshot`, 'green');
+            if (needSnapshot) {
+                lastSnapshot = await ultra.activeTestState.snapshot(`realtime-tester-${snapshotCounter}`);
+                snapshotCounter++;
+                logger.log(`✔ Created a snapshot`, 'green');
+            }
 
-            // Run all the tests
-            let allPassed = true;
-            for (let key of Object.keys(tests)) {
+            let testCases: { [key: string]: Function } = {};
+            if (typeof tests === 'string') {
+                try {
+                    // Use require instead of import to have ability to delete cache
+                    let module = this.fixPath(ultra.activeTestState.filePath, tests);
+                    delete require.cache[module];
+                    testCases = require(module)(ultra);
+                } catch (e) {
+                    logger.error(e);
+                    testCases = {};
+                }
+            } else {
+                testCases = tests;
+            }
+
+            logger.setIndentation(2);
+            for (let key of Object.keys(testCases)) {
                 const testName = key;
-                const testFunc = tests[key];
+                const testFunc = testCases[key];
 
                 try {
                     await testFunc();
                     logger.log(`✔ ${testName}`, 'green', 2);
                 } catch (err) {
-                    allPassed = false;
                     logger.log(`✗ ${testName}`, 'red', 2);
                     logger.error(err);
                 }
             }
 
-            // Wait for smart contract update
+            // Wait for smart contract or file update
             if (runForever) {
-                let diff = await this.getDiff(monitored);
-                logger.log(`> Waiting for smart contracts to be modified`, 'green', 1);
-                while(diff.length === 0) {
+                let diffContracts = await this.getDiffContracts(monitoredContracts);
+                let diffFiles = await this.getDiffFiles(monitoredFiles);
+                logger.log(`> Waiting for smart contracts or files to be modified`, 'green', 1);
+                while(diffContracts.length === 0 && diffFiles.length === 0) {
                     await this.sleep(1000);
-                    diff = await this.getDiff(monitored);
+                    diffContracts = await this.getDiffContracts(monitoredContracts);
+                    diffFiles = await this.getDiffFiles(monitoredFiles);
+
+                    // Snapshot is only needed if smart contract was updated
+                    // Otherwise there should be no new transactions to warrant a snapshot
+                    needSnapshot = false;
+                    if (diffContracts.length > 0) {
+                        needSnapshot = true;
+                    }
                 }
 
                 // Revert to the last snapshot
-                await ultra.activeTestState.restore(snapshot);
+                await ultra.activeTestState.restore(lastSnapshot);
 
                 logger.log(`✔ Restored from snapshot`, 'green');
 
                 // Update smart contracts
-                for (let i = 0; i < diff.length; i++) {
-                    await this.setAbiAndWasm(ultra, diff[i].account, diff[i].abiPath, diff[i].wasmPath);
-                    logger.log(`✔ Refreshed ${diff[i].account}`, 'green');
+                for (let i = 0; i < diffContracts.length; i++) {
+                    await this.setAbiAndWasm(ultra, diffContracts[i].account, diffContracts[i].abiPath, diffContracts[i].wasmPath);
+                    logger.log(`✔ Refreshed ${diffContracts[i].account}`, 'green');
                 }
 
-                await this.sleep(1000 * ultra.activeTestState.nodeosInstances.length);
+                // The additional delay helps prevent duplicate snapshot hashes
+                // Obviously not needed if we won't create a snapshot
+                if (needSnapshot) {
+                    await this.sleep(1000 * ultra.activeTestState.nodeosInstances.length);
+                }
 
                 logger.log(`> Repeating tests`, 'green');
             }
