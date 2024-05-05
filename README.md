@@ -6,6 +6,8 @@ This plugin allows you to run your test cases repeatedly each time you recompile
 
 This means you can save some time on test initialization and you don't need to invoke the `ultratest` command again!
 
+It also provides functionality to hot reload test cases.
+
 ## How to install
 
 Add this repository to the `ultratestPlugins` of your tests `package.json` like so:
@@ -85,6 +87,74 @@ ultratest -t ./mytest.spec.ts
 
 5. To stop the tester use the `Ctrl+C` or its equivalent for your system
 
+Note that smart contract WASM/ABI must already exist for the plugin to work!
+
+## How to track other types of files
+
+In addition to smart contract files you can track arbitrary file changes. To do so use the `monitorFiles` method:
+
+```ts
+monitorFiles() {
+    return ['data.json', '/home/user/transaciton.json'];
+}
+```
+
+The plugin will run your test cases again when ANY of the files is modified.
+
+Files can be missing when you start the tests and will be tracked as soon as they appear.
+
+Note that relative `~/` home paths are not supported!
+
+## How to hot reload tests
+
+Argument for test cases of `runTests` can be replaced with a path to a `.ts` file containing a module export with test cases you want to run like so:
+
+```ts
+await tester.runTests(ultra, './testCases.ts');
+```
+
+The contents of `testCases.ts` should look similar to this:
+
+```ts
+import { UltraTestAPI } from '@ultraos/ultratest/interfaces/test';
+
+module.exports = ((ultra: UltraTestAPI) => {
+    return {
+        'Print hello': async() => {
+            ultra.logger.log('hello');
+        }
+    };
+});
+```
+
+The requirement is that there should be a `module.exports` providing a single function that accepts only a single argument. The same `ultra: UltraTestAPI` will be provided here just like for your regular test cases.
+
+Now if you run the test any time you make a change to the test cases file it will re-import it and run the tests again:
+
+```sh
+    > Monitoring: /home/.../tests/testCases.ts
+    > Running tets repeatedly
+    ✔ Created a snapshot
+        hello
+        ✔ Print hello
+    > Waiting for smart contracts or files to be modified
+    ✔ Restored from snapshot
+    > Repeating tests
+        hello 2
+        ✔ Print hello 2
+    > Waiting for smart contracts or files to be modified
+```
+
+You don't have to provide file names in `monitorFiles` for the tracking to work, these source files will be automatically be added to the tracking list.
+
+You can also provide an array of test cases files instead of a single file:
+
+```ts
+await tester.runTests(ultra, ['./action1_tests.ts', './action2_tests.ts']);
+```
+
+Note that the test cases file must already exist before you run the plugin!
+
 ## How it works
 
 The plugin will periodically check the modification date of the ABI and WASM files and will revert to an older snapshot, redeploy the contract and run the tests again if any of the tracked contracts are updated.
@@ -93,9 +163,11 @@ Since it effectively runs in the infinite loop it makes no sense to run multiple
 
 When you run the test with this plugin it will report if any of the test cases fail:
 
-```
+```sh
 Cases: 
 
+    > Monitoring: /home/.../src/main.abi
+    > Monitoring: /home/.../src/main.wasm
     > Running tets repeatedly
     ✔ Created a snapshot
         ✔ Push transaction
@@ -115,3 +187,5 @@ Cases:
             at Push transaction ...
     > Waiting for smart contracts to be modified
 ```
+
+When hot reloading test cases the plugin will use `require()` syntax to be able to delete the cache later. This is required for this feature to work. If your test cases cannot be written in a way that supports being able to be loaded through `require()` then you won't be able to use this feature.

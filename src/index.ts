@@ -114,11 +114,13 @@ export class RealtimeContractTesterAPI {
     private getDiffFiles(monitored: MonitoredFile[]): MonitoredFile[] {
         let result: MonitoredFile[] = [];
         for (let i = 0; i < monitored.length; i++) {
-            let stat = fs.statSync(monitored[i].file);
-            if (monitored[i].lastModifiedTimestamp !== stat.mtimeMs) {
-                result.push(monitored[i]);
+            if (fs.existsSync(monitored[i].file)) {
+                let stat = fs.statSync(monitored[i].file);
+                if (monitored[i].lastModifiedTimestamp !== stat.mtimeMs) {
+                    result.push(monitored[i]);
+                }
+                monitored[i].lastModifiedTimestamp = stat.mtimeMs;
             }
-            monitored[i].lastModifiedTimestamp = stat.mtimeMs;
         }
         return result;
     }
@@ -170,13 +172,42 @@ export class RealtimeContractTesterAPI {
         return await ultra.api.transact(actions);
     }
 
-    public async importFresh(modulePath) {
-        // Oof: https://ar.al/2021/02/22/cache-busting-in-node.js-dynamic-esm-imports/
-        const cacheBustingModulePath = `${modulePath}?update=${Date.now()}`;
-        return (await import(cacheBustingModulePath));
+    private async runTestsGroup(ultra: UltraTestAPI, tests: { [key: string]: Function } | string) {
+        let testCases: { [key: string]: Function } = {};
+        if (typeof tests === 'string') {
+            try {
+                // Use require instead of import to have ability to delete cache
+                let module = this.fixPath(ultra.activeTestState.filePath, tests);
+                delete require.cache[module];
+                testCases = require(module)(ultra);
+            } catch (e) {
+                logger.error(e);
+                testCases = {};
+            }
+        } else {
+            testCases = tests;
+        }
+
+        return await this.runTestCases(testCases);
     }
 
-    public async runTests(ultra: UltraTestAPI, tests: { [key: string]: Function } | string) {
+    private async runTestCases(testCases: { [key: string]: Function }) {
+        logger.setIndentation(2);
+        for (let key of Object.keys(testCases)) {
+            const testName = key;
+            const testFunc = testCases[key];
+
+            try {
+                await testFunc();
+                logger.log(`✔ ${testName}`, 'green', 2);
+            } catch (err) {
+                logger.log(`✗ ${testName}`, 'red', 2);
+                logger.error(err);
+            }
+        }
+    }
+
+    public async runTests(ultra: UltraTestAPI, tests: { [key: string]: Function } | string | string[]) {
         let monitoredContracts: MonitoredContract[] = [];
         let monitoredFiles: MonitoredFile[] = [];
         let func = (<RealtimeContractTesterTest>ultra.activeTestState.file).monitorContracts;
@@ -187,6 +218,23 @@ export class RealtimeContractTesterAPI {
         if (func2) {
             monitoredFiles = func2().map((f) => {return {file: this.fixPath(ultra.activeTestState.filePath, f)}});
         }
+
+        // Add test cases files to the list of tracked files
+        if (typeof tests === 'string') {
+            let module = this.fixPath(ultra.activeTestState.filePath, tests);
+            if (!monitoredFiles.find((f) => f.file === module)) {
+                monitoredFiles.push({file: module});
+            }
+        }
+        if (Array.isArray(tests)) {
+            for (let t of tests) {
+                let module = this.fixPath(ultra.activeTestState.filePath, t);
+                if (!monitoredFiles.find((f) => f.file === module)) {
+                    monitoredFiles.push({file: module});
+                }
+            }
+        }
+
         monitoredContracts = this.collectWasmAndAbi(ultra.activeTestState.filePath, monitoredContracts);
 
         for (let i = 0; i < monitoredContracts.length; i++) {
@@ -195,6 +243,9 @@ export class RealtimeContractTesterAPI {
         }
         for (let i = 0; i < monitoredFiles.length; i++) {
             logger.log(`> Monitoring: ${monitoredFiles[i].file}`, 'green');
+            if (!fs.existsSync(monitoredFiles[i].file)) {
+                logger.log(`> Monitored file ${monitoredFiles[i].file} does not currently exist`, 'yellow');
+            }
         }
 
         // Get initial difference to initialize timestamps
@@ -219,33 +270,12 @@ export class RealtimeContractTesterAPI {
                 logger.log(`✔ Created a snapshot`, 'green');
             }
 
-            let testCases: { [key: string]: Function } = {};
-            if (typeof tests === 'string') {
-                try {
-                    // Use require instead of import to have ability to delete cache
-                    let module = this.fixPath(ultra.activeTestState.filePath, tests);
-                    delete require.cache[module];
-                    testCases = require(module)(ultra);
-                } catch (e) {
-                    logger.error(e);
-                    testCases = {};
+            if (Array.isArray(tests)) {
+                for (let t of tests) {
+                    await this.runTestsGroup(ultra, t);
                 }
             } else {
-                testCases = tests;
-            }
-
-            logger.setIndentation(2);
-            for (let key of Object.keys(testCases)) {
-                const testName = key;
-                const testFunc = testCases[key];
-
-                try {
-                    await testFunc();
-                    logger.log(`✔ ${testName}`, 'green', 2);
-                } catch (err) {
-                    logger.log(`✗ ${testName}`, 'red', 2);
-                    logger.error(err);
-                }
+                await this.runTestsGroup(ultra, tests);
             }
 
             // Wait for smart contract or file update
