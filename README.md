@@ -79,7 +79,7 @@ async tests(ultra: UltraTestAPI) {
 }
 ```
 
-4. Run a single test file which uses this plugin. If you run tests from a directory the plugin will only do them once and will not be checking for contract changes
+4. Run a single test file which uses this plugin. If you run tests from a directory the plugin will only do them once and will not be checking for contract changes (so it will NOT re-run with `-t ./directory` or if there is no `-t` argument at all)
 
 ```sh
 ultratest -t ./mytest.spec.ts
@@ -131,7 +131,7 @@ The requirement is that there should be a `module.exports` providing a single fu
 
 Now if you run the test any time you make a change to the test cases file it will re-import it and run the tests again:
 
-```sh
+```
     > Monitoring: /home/.../tests/testCases.ts
     > Running tets repeatedly
     ✔ Created a snapshot
@@ -163,7 +163,7 @@ Since it effectively runs in the infinite loop it makes no sense to run multiple
 
 When you run the test with this plugin it will report if any of the test cases fail:
 
-```sh
+```
 Cases: 
 
     > Monitoring: /home/.../src/main.abi
